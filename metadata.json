@@ -1,0 +1,5 @@
+{
+  "name": "Deterministic Network Controller",
+  "description": "A self-healing Wi-Fi controller with forensic telemetry, real-time monitoring, and automatic NetworkManager configuration recovery.",
+  "requestFramePermissions": []
+}
