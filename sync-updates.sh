@@ -30,18 +30,27 @@ set -euo pipefail
 # ── REQUEST COMPLIANCE: DIRECTORY DERIVATION ─────────────────────────────────
 # All scripts must derive their working directory from PROJECT_ROOT.
 if [[ -z "${PROJECT_ROOT:-}" ]]; then
-    echo "FATAL: PROJECT_ROOT environment variable is not set." >&2
-    exit 1
+    if [[ $# -gt 0 && "$1" != --* ]]; then
+        PROJECT_ROOT="$1"
+        shift
+    else
+        PROJECT_ROOT=$(pwd)
+    fi
 fi
+export PROJECT_ROOT
 cd "$PROJECT_ROOT"
 
 # ── REQUEST COMPLIANCE: LOG PATH PRINTING ────────────────────────────────────
 # Every script that writes to a log must print the absolute path of that log to STDOUT.
 LOG_FILE="${PROJECT_ROOT}/verbatim_handshake.log"
+UI_LOG_FILE="${PROJECT_ROOT}/fix-wifi.log"
 echo "$LOG_FILE"
+echo "$UI_LOG_FILE"
 
 log() {
-  echo "[$(date -Is)] [SYNC] $*" | tee -a "$LOG_FILE"
+  local line="[$(date -Is)] [SYNC] $*"
+  echo "$line" | tee -a "$LOG_FILE"
+  echo "$line" >> "$UI_LOG_FILE"
 }
 
 # -----------------------------------------------------------------------------

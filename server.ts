@@ -1,3 +1,15 @@
+/**
+ * ── REQUEST COMPLIANCE: NUMBERED USER REQUESTS ───────────────────────────────
+ *   1. Restore all telemetry data (ensure verbatim transparency in terminal).
+ *   2. Fix recovery failures (especially for b43 hardware).
+ *   3. Number the requests in the code comments.
+ *   4. Fix each request individually.
+ *   5. Emit upgraded code repository.
+ *   6. Limit prose to verbose code comments.
+ *   7. Include cutting-edge best practices linting code (v6.3).
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
@@ -26,7 +38,7 @@ const getDb = () => {
 const runScript = (args: string[], res: express.Response) => {
   const useSudo = fs.existsSync('/usr/bin/sudo') || fs.existsSync('/bin/sudo');
   const command = useSudo ? 'sudo' : args.shift()!;
-  const finalArgs = useSudo ? args : args;
+  const finalArgs = useSudo ? [`PROJECT_ROOT=${PROJECT_ROOT}`, ...args] : args;
 
   const child = spawn(command, finalArgs, {
     cwd: PROJECT_ROOT,
@@ -103,7 +115,7 @@ app.get('/api/forensics', (req, res) => {
 app.post('/api/recover', (req, res) => {
   const useSudo = fs.existsSync('/usr/bin/sudo') || fs.existsSync('/bin/sudo');
   const command = useSudo ? 'sudo' : './fix-wifi.sh';
-  const args = useSudo ? ['./fix-wifi.sh', PROJECT_ROOT, '--force'] : [PROJECT_ROOT, '--force'];
+  const args = useSudo ? [`PROJECT_ROOT=${PROJECT_ROOT}`, './fix-wifi.sh', PROJECT_ROOT, '--force'] : [PROJECT_ROOT, '--force'];
 
   const child = spawn(command, args, {
     cwd: PROJECT_ROOT,
@@ -134,8 +146,13 @@ app.get('/api/stream', (req, res) => {
 
   // Initial tail
   if (fs.existsSync(LOG_PATH)) {
-    const content = fs.readFileSync(LOG_PATH, 'utf8');
-    sendEvent({ type: 'log', lines: content.split('\n').slice(-100) });
+    try {
+      const content = fs.readFileSync(LOG_PATH, 'utf8');
+      const lines = content.split('\n').filter(l => l.trim()).slice(-100);
+      if (lines.length > 0) sendEvent({ type: 'log', lines });
+    } catch (e) {
+      console.error(`[server] Initial log read error: ${e}`);
+    }
   }
 
   // ── REQUEST COMPLIANCE: ROBUST LOG WATCHING ────────────────────────────────
@@ -143,11 +160,13 @@ app.get('/api/stream', (req, res) => {
     fs.writeFileSync(LOG_PATH, '', { mode: 0o600 });
   }
 
-  const watcher = fs.watch(LOG_PATH, (event) => {
-    if (event === 'change') {
+  // Use watchFile for better reliability across different environments
+  fs.watchFile(LOG_PATH, { interval: 1000 }, (curr, prev) => {
+    if (curr.mtime !== prev.mtime) {
       try {
         const content = fs.readFileSync(LOG_PATH, 'utf8');
-        sendEvent({ type: 'log', lines: content.split('\n').slice(-20) });
+        const lines = content.split('\n').filter(l => l.trim()).slice(-20);
+        if (lines.length > 0) sendEvent({ type: 'log', lines });
       } catch (e) {
         console.error(`[server] Watch error: ${e}`);
       }
@@ -155,7 +174,7 @@ app.get('/api/stream', (req, res) => {
   });
 
   req.on('close', () => {
-    watcher.close();
+    fs.unwatchFile(LOG_PATH);
   });
 });
 
@@ -178,6 +197,17 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`PROJECT_ROOT: ${PROJECT_ROOT}`);
+    
+    // Initial audit to generate telemetry on startup
+    const useSudo = fs.existsSync('/usr/bin/sudo') || fs.existsSync('/bin/sudo');
+    const command = useSudo ? 'sudo' : './fix-wifi.sh';
+    const args = useSudo ? [`PROJECT_ROOT=${PROJECT_ROOT}`, './fix-wifi.sh', PROJECT_ROOT, '--audit'] : [PROJECT_ROOT, '--audit'];
+    
+    console.log(`[server] Starting initial audit...`);
+    spawn(command, args, {
+      cwd: PROJECT_ROOT,
+      env: { ...process.env, PROJECT_ROOT }
+    });
   });
 }
 

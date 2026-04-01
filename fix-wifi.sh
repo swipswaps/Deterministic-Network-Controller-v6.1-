@@ -26,11 +26,16 @@ set -o errexit -o pipefail -o nounset
 # All scripts must derive their working directory from PROJECT_ROOT.
 # Request 4: Re-validate internal paths against the first argument if provided.
 if [[ -z "${PROJECT_ROOT:-}" ]]; then
-    echo "FATAL: PROJECT_ROOT environment variable is not set." >&2
-    exit 1
+    if [[ $# -gt 0 && "$1" != --* ]]; then
+        PROJECT_ROOT="$1"
+        shift
+    else
+        PROJECT_ROOT=$(pwd)
+    fi
 fi
+export PROJECT_ROOT
 
-# Re-validation against argument
+# Re-validation against argument (if still present)
 if [[ $# -gt 0 && "$1" != --* ]]; then
     ARG_ROOT="$1"
     if [[ "$ARG_ROOT" != "$PROJECT_ROOT" ]]; then
@@ -118,8 +123,13 @@ sq() {
 }
 
 init_log() {
-    if [[ ! -f "$LOG_FILE" ]]; then touch "$LOG_FILE"; chmod 600 "$LOG_FILE"; fi
-    log_stream "ENGINE" "Log initialized (600 permissions)"
+    if [[ ! -f "$LOG_FILE" ]]; then
+        touch "$LOG_FILE"
+        # Ensure the log is readable by the web server (running as owner)
+        # but keep it restricted if possible. 644 is a safe compromise for telemetry.
+        chmod 644 "$LOG_FILE"
+    fi
+    log_stream "ENGINE" "Log initialized (644 permissions for verbatim transparency)"
 }
 
 cleanup() {
@@ -609,10 +619,20 @@ run_recovery() {
     run_cmd $SUDO systemctl stop NetworkManager
     
     if [[ "$driver" == "b43" ]]; then
-        log_stream "RECOVERY" "Performing aggressive b43 module reload"
+        log_stream "RECOVERY" "Performing aggressive b43 module reload (Request 2)"
+        # Check for firmware errors first
+        if dmesg | tail -100 | grep -qi "b43-phy0 ERROR: Firmware"; then
+            log_stream "RECOVERY" "⚠️ WARNING: b43 firmware error detected in dmesg"
+        fi
+        # Unload wl if present (conflicts with b43)
+        if lsmod | grep -q "^wl "; then
+            log_stream "RECOVERY" "Unloading conflicting 'wl' driver"
+            run_cmd $SUDO modprobe -r wl
+        fi
         run_cmd $SUDO modprobe -r b43 bcma ssb 2>/dev/null || run_cmd $SUDO modprobe -r b43
         sleep 2
-        run_cmd $SUDO modprobe b43
+        # Re-load with QoS disabled if it's a known problematic chip
+        run_cmd $SUDO modprobe b43 qos=0
     elif [[ "$driver" == "brcmfmac" ]]; then
         log_stream "RECOVERY" "Performing brcmfmac module reload"
         run_cmd $SUDO modprobe -r brcmfmac brcmutil

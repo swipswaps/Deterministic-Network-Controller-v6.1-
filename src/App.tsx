@@ -42,6 +42,7 @@ export default function App() {
   const [forensics, setForensics] = useState<Forensic[]>([]);
   const [isRecovering, setIsRecovering] = useState(false);
   const [lintResult, setLintResult] = useState<any>(null);
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const runLint = async () => {
@@ -97,12 +98,16 @@ export default function App() {
     }, 5000);
 
     const eventSource = new EventSource('/api/stream');
+    eventSource.onopen = () => setConnectionStatus('connected');
+    eventSource.onerror = () => setConnectionStatus('disconnected');
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.type === 'log') {
         setLogs(prev => {
           const newLogs = [...prev, ...data.lines];
-          return Array.from(new Set(newLogs)).slice(-200);
+          // Filter duplicates and keep last 200
+          const uniqueLogs = Array.from(new Set(newLogs));
+          return uniqueLogs.slice(-200);
         });
       }
     };
@@ -301,25 +306,42 @@ export default function App() {
               <h2 className="text-sm font-semibold uppercase tracking-wider text-white/50 flex items-center gap-2">
                 <Terminal size={16} /> Live Telemetry Stream
               </h2>
-              <div className="flex gap-2">
-                <div className="w-2.5 h-2.5 rounded-full bg-red-500/50" />
-                <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/50" />
-                <div className="w-2.5 h-2.5 rounded-full bg-green-500/50" />
+              <div className="flex items-center gap-3">
+                <div className="flex gap-1.5">
+                  <div className={`w-2 h-2 rounded-full ${connectionStatus === 'connected' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-red-500'}`} />
+                  <span className="text-[10px] font-bold text-white/30 uppercase tracking-widest">{connectionStatus}</span>
+                </div>
+                <div className="flex gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-red-500/50" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/50" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-green-500/50" />
+                </div>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-white/10">
-              {logs.map((line, i) => (
-                <div key={i} className={`whitespace-pre-wrap ${
-                  line.includes('[EXEC]') ? 'text-blue-400' :
-                  line.includes('[RC] rc=0') ? 'text-emerald-400' :
-                  line.includes('[RC] rc=') ? 'text-red-400' :
-                  line.includes('[HEALTH]') ? 'text-purple-400 font-bold' :
-                  line.includes('[NM_AUDIT]') ? 'text-yellow-400' :
-                  'text-white/70'
+            <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-white/10 bg-[#050505]">
+              {logs.length > 0 ? logs.map((line, i) => (
+                <div key={i} className={`whitespace-pre-wrap border-l-2 pl-3 py-0.5 transition-colors hover:bg-white/5 ${
+                  line.includes('[EXEC]') ? 'text-blue-400 border-blue-500/50' :
+                  line.includes('[RC] rc=0') ? 'text-emerald-400 border-emerald-500/50' :
+                  line.includes('[RC] rc=') ? 'text-red-400 border-red-500/50' :
+                  line.includes('[HEALTH]') ? 'text-purple-400 font-bold border-purple-500/50' :
+                  line.includes('[NM_AUDIT]') ? 'text-yellow-400 border-yellow-500/50' :
+                  line.includes('[SYNC]') ? 'text-cyan-400 border-cyan-500/50' :
+                  'text-white/70 border-transparent'
                 }`}>
                   {line}
                 </div>
-              ))}
+              )) : (
+                <div className="flex flex-col items-center justify-center h-full text-white/20 space-y-4">
+                  <div className="animate-pulse flex flex-col items-center gap-2">
+                    <Terminal size={48} className="opacity-20" />
+                    <p className="text-sm italic">Waiting for telemetry stream...</p>
+                  </div>
+                  <p className="text-[10px] max-w-[200px] text-center opacity-50 uppercase tracking-tighter">
+                    Ensure the engine is running or click "Force Recovery" to generate data.
+                  </p>
+                </div>
+              )}
               <div ref={logEndRef} />
             </div>
           </section>
