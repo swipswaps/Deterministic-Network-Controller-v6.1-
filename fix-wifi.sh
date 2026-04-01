@@ -92,6 +92,12 @@ _PREV_DEGRADED_COUNT=0
 _DEGRADED_STARTED_AT=0
 _STARTUP_RECOVERY_DONE=0
 
+# ── SUDO HELPER ──────────────────────────────────────────────────────────────
+SUDO=""
+if command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo"
+fi
+
 log_stream() {
     local tag="$1" msg="$2"
     local ts; ts=$(date -Iseconds)
@@ -151,7 +157,7 @@ ENDSQL
 # ── DEPENDENCIES ─────────────────────────────────────────────────────────────
 check_dependencies() {
     # Request 4: Ensure all required system binaries are present.
-    local deps=("nmcli" "sqlite3" "ping" "ip" "getent" "dig" "sudo" "modprobe" "iw" "ethtool")
+    local deps=("nmcli" "sqlite3" "ping" "ip" "getent" "dig" "modprobe" "iw" "ethtool")
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" >/dev/null 2>&1; then
             log_stream "FATAL" "Missing dependency: $dep"
@@ -238,7 +244,7 @@ collect_forensics() {
     # 14. tcpdump: live packet capture
     if command -v tcpdump >/dev/null 2>&1; then
         log_stream "FORENSIC" "Capturing $TCPDUMP_COUNT packets on $iface (5s)..."
-        out=$(sudo timeout 5 tcpdump -i "$iface" -c "$TCPDUMP_COUNT" -n -e -v 2>&1 || echo "(ended)")
+        out=$($SUDO timeout 5 tcpdump -i "$iface" -c "$TCPDUMP_COUNT" -n -e -v 2>&1 || echo "(ended)")
         tee_block "TCPDUMP: live packet capture on $iface ($TCPDUMP_COUNT pkts)" "$out"
         record_forensic "$trigger" "tcpdump_live" "$out"
     fi
@@ -281,7 +287,7 @@ enforce_b43_optimizations() {
     if [[ "$AUTO_DISABLE_B43_POWER_SAVE" -eq 1 ]]; then
         if [[ $(iw dev "$iface" get power_save 2>/dev/null | grep -c "on") -gt 0 ]]; then
             log_stream "OPTIMIZE" "Disabling b43 power save on $iface"
-            sudo iw dev "$iface" set power_save off || true
+            $SUDO iw dev "$iface" set power_save off || true
         fi
     fi
 }
@@ -319,7 +325,7 @@ lint_script() {
     fi
 
     # 5. Sudo Usage Audit (Contextual)
-    if grep -q "sudo " "$0" && ! grep -q "NOPASSWD" README.md; then
+    if grep -qE "\$SUDO |sudo " "$0" && ! grep -q "NOPASSWD" README.md; then
         log_stream "LINT" "⚠ WARNING: Sudo used but NOPASSWD instructions missing in README"
     fi
 
@@ -408,8 +414,8 @@ enforce_nm_applet() {
     if [[ "$nm_networking" == "disabled" ]]; then
         log_stream "APPLET_ENFORCE" "❌ Applet disabled networking — forcing ON"
         run_cmd nmcli networking on
-        sudo mkdir -p /var/lib/NetworkManager
-        sudo tee "$statefile" >/dev/null <<EOF
+        $SUDO mkdir -p /var/lib/NetworkManager
+        $SUDO tee "$statefile" >/dev/null <<EOF
 [main]
 NetworkingEnabled=true
 EOF
@@ -569,7 +575,7 @@ wait_for_networking_enabled() {
 
 run_soft_recovery() {
     log_stream "RECOVERY" "SOFT: Restarting NetworkManager"
-    run_cmd sudo systemctl restart NetworkManager
+    run_cmd $SUDO systemctl restart NetworkManager
     wait_for_nm
 }
 
@@ -600,24 +606,24 @@ run_recovery() {
     log_stream "RECOVERY" "Detected driver: $driver"
 
     # Request 2: Improved b43 recovery (reload bcma/ssb if present)
-    run_cmd sudo systemctl stop NetworkManager
+    run_cmd $SUDO systemctl stop NetworkManager
     
     if [[ "$driver" == "b43" ]]; then
         log_stream "RECOVERY" "Performing aggressive b43 module reload"
-        run_cmd sudo modprobe -r b43 bcma ssb 2>/dev/null || run_cmd sudo modprobe -r b43
+        run_cmd $SUDO modprobe -r b43 bcma ssb 2>/dev/null || run_cmd $SUDO modprobe -r b43
         sleep 2
-        run_cmd sudo modprobe b43
+        run_cmd $SUDO modprobe b43
     elif [[ "$driver" == "brcmfmac" ]]; then
         log_stream "RECOVERY" "Performing brcmfmac module reload"
-        run_cmd sudo modprobe -r brcmfmac brcmutil
+        run_cmd $SUDO modprobe -r brcmfmac brcmutil
         sleep 2
-        run_cmd sudo modprobe brcmfmac
+        run_cmd $SUDO modprobe brcmfmac
     else
         log_stream "RECOVERY" "Unknown driver, skipping module reload"
     fi
 
     sleep 3
-    run_cmd sudo systemctl start NetworkManager
+    run_cmd $SUDO systemctl start NetworkManager
     wait_for_nm
     
     local uuid; uuid=$(find_wifi_uuid "$iface")
@@ -690,8 +696,8 @@ main() {
     case "${1:-loop}" in
         --lint) lint_script ;;
         --force) run_recovery "$IFACE"; validate_recovery || true; run_loop ;;
-        --audit) audit_nm_settings "$IFACE" ;;
-        *) run_loop ;;
+        --audit) collect_forensics "AUDIT" "$IFACE"; audit_nm_settings "$IFACE" ;;
+        *) collect_forensics "START" "$IFACE"; run_loop ;;
     esac
 }
 

@@ -47,10 +47,15 @@ export default function App() {
   const runLint = async () => {
     try {
       const res = await fetch('/api/lint');
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Lint failed: ${res.status} ${text}`);
+      }
       const data = await res.json();
       setLintResult(data);
     } catch (e) {
       console.error('Lint failed', e);
+      setLintResult({ code: 1, output: String(e) });
     }
   };
 
@@ -58,6 +63,10 @@ export default function App() {
     const fetchStatus = async () => {
       try {
         const res = await fetch('/api/status');
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`Status fetch failed: ${res.status} ${text}`);
+        }
         const data = await res.json();
         setStatus(data);
       } catch (e) {
@@ -68,6 +77,10 @@ export default function App() {
     const fetchForensics = async () => {
       try {
         const res = await fetch('/api/forensics');
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`Forensics fetch failed: ${res.status} ${text}`);
+        }
         const data = await res.json();
         setForensics(data);
       } catch (e) {

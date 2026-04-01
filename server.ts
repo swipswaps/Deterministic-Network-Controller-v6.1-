@@ -23,33 +23,12 @@ const getDb = () => {
 
 // ── API ROUTES ──────────────────────────────────────────────────────────────
 
-app.get('/api/status', (req, res) => {
-  const db = getDb();
-  if (!db) return res.json({ status: 'initializing' });
+const runScript = (args: string[], res: express.Response) => {
+  const useSudo = fs.existsSync('/usr/bin/sudo') || fs.existsSync('/bin/sudo');
+  const command = useSudo ? 'sudo' : args.shift()!;
+  const finalArgs = useSudo ? args : args;
 
-  try {
-    const lastHealth = db.prepare('SELECT * FROM stats ORDER BY id DESC LIMIT 1').get();
-    const lastMilestone = db.prepare('SELECT * FROM milestones ORDER BY id DESC LIMIT 1').get();
-    const auditFindings = db.prepare('SELECT * FROM nm_audit ORDER BY id DESC LIMIT 10').all();
-    const ifaceHealth = db.prepare('SELECT * FROM iface_health ORDER BY id DESC LIMIT 5').all();
-    
-    res.json({
-      lastHealth,
-      lastMilestone,
-      auditFindings,
-      ifaceHealth,
-      dbPath: DB_PATH,
-      logPath: LOG_PATH
-    });
-  } catch (error) {
-    res.status(500).json({ error: String(error) });
-  } finally {
-    db.close();
-  }
-});
-
-app.get('/api/lint', (req, res) => {
-  const child = spawn('sudo', ['./fix-wifi.sh', PROJECT_ROOT, '--lint'], {
+  const child = spawn(command, finalArgs, {
     cwd: PROJECT_ROOT,
     env: { ...process.env, PROJECT_ROOT }
   });
@@ -58,27 +37,81 @@ app.get('/api/lint', (req, res) => {
   child.stdout.on('data', (data) => output += data);
   child.stderr.on('data', (data) => output += data);
 
-  child.on('close', (code) => {
-    res.json({ code, output });
+  child.on('error', (err) => {
+    console.error(`Failed to start process: ${err}`);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to start recovery process', details: err.message });
+    }
   });
+
+  child.on('close', (code) => {
+    if (!res.headersSent) {
+      res.json({ code, output });
+    }
+  });
+};
+
+app.get('/api/status', (req, res) => {
+  const db = getDb();
+  if (!db) return res.json({ status: 'initializing', lastHealth: null, lastMilestone: null, auditFindings: [], ifaceHealth: [] });
+
+  try {
+    // Check if tables exist before querying
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+    const hasTable = (name: string) => tables.some((t: any) => t.name === name);
+
+    const status: any = {
+      status: 'active',
+      dbPath: DB_PATH,
+      logPath: LOG_PATH,
+      lastHealth: hasTable('stats') ? db.prepare('SELECT * FROM stats ORDER BY id DESC LIMIT 1').get() : null,
+      lastMilestone: hasTable('milestones') ? db.prepare('SELECT * FROM milestones ORDER BY id DESC LIMIT 1').get() : null,
+      auditFindings: hasTable('nm_audit') ? db.prepare('SELECT * FROM nm_audit ORDER BY id DESC LIMIT 10').all() : [],
+      ifaceHealth: hasTable('iface_health') ? db.prepare('SELECT * FROM iface_health ORDER BY id DESC LIMIT 5').all() : []
+    };
+    
+    res.json(status);
+  } catch (error) {
+    console.error('Status API Error:', error);
+    res.status(500).json({ error: String(error) });
+  } finally {
+    db.close();
+  }
+});
+
+app.get('/api/lint', (req, res) => {
+  runScript(['./fix-wifi.sh', PROJECT_ROOT, '--lint'], res);
 });
 
 app.get('/api/forensics', (req, res) => {
   const db = getDb();
   if (!db) return res.json([]);
   try {
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+    if (!tables.some((t: any) => t.name === 'forensics')) return res.json([]);
+    
     const forensics = db.prepare('SELECT * FROM forensics ORDER BY id DESC LIMIT 50').all();
     res.json(forensics);
+  } catch (error) {
+    console.error('Forensics API Error:', error);
+    res.status(500).json({ error: String(error) });
   } finally {
     db.close();
   }
 });
 
 app.post('/api/recover', (req, res) => {
-  // ── REQUEST COMPLIANCE: SYSTEM BINARY CALL WITH CWD AS ARGUMENT ───────────
-  const child = spawn('sudo', ['./fix-wifi.sh', PROJECT_ROOT, '--force'], {
+  const useSudo = fs.existsSync('/usr/bin/sudo') || fs.existsSync('/bin/sudo');
+  const command = useSudo ? 'sudo' : './fix-wifi.sh';
+  const args = useSudo ? ['./fix-wifi.sh', PROJECT_ROOT, '--force'] : [PROJECT_ROOT, '--force'];
+
+  const child = spawn(command, args, {
     cwd: PROJECT_ROOT,
     env: { ...process.env, PROJECT_ROOT }
+  });
+
+  child.on('error', (err) => {
+    console.error(`Failed to start recovery: ${err}`);
   });
 
   child.stdout.on('data', (data) => console.log(`[fix-wifi] ${data}`));
