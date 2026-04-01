@@ -37,8 +37,8 @@ const getDb = () => {
 
 const runScript = (args: string[], res: express.Response) => {
   const useSudo = fs.existsSync('/usr/bin/sudo') || fs.existsSync('/bin/sudo');
-  const command = useSudo ? 'sudo' : args.shift()!;
-  const finalArgs = useSudo ? [`PROJECT_ROOT=${PROJECT_ROOT}`, ...args] : args;
+  const command = useSudo ? 'sudo' : 'bash';
+  const finalArgs = useSudo ? ['env', `PROJECT_ROOT=${PROJECT_ROOT}`, 'bash', './fix-wifi.sh', ...args] : ['./fix-wifi.sh', ...args];
 
   const child = spawn(command, finalArgs, {
     cwd: PROJECT_ROOT,
@@ -92,7 +92,7 @@ app.get('/api/status', (req, res) => {
 });
 
 app.get('/api/lint', (req, res) => {
-  runScript(['./fix-wifi.sh', PROJECT_ROOT, '--lint'], res);
+  runScript([PROJECT_ROOT, '--lint'], res);
 });
 
 app.get('/api/forensics', (req, res) => {
@@ -114,8 +114,8 @@ app.get('/api/forensics', (req, res) => {
 
 app.post('/api/recover', (req, res) => {
   const useSudo = fs.existsSync('/usr/bin/sudo') || fs.existsSync('/bin/sudo');
-  const command = useSudo ? 'sudo' : './fix-wifi.sh';
-  const args = useSudo ? [`PROJECT_ROOT=${PROJECT_ROOT}`, './fix-wifi.sh', PROJECT_ROOT, '--force'] : [PROJECT_ROOT, '--force'];
+  const command = useSudo ? 'sudo' : 'bash';
+  const args = useSudo ? ['env', `PROJECT_ROOT=${PROJECT_ROOT}`, 'bash', './fix-wifi.sh', PROJECT_ROOT, '--force'] : ['./fix-wifi.sh', PROJECT_ROOT, '--force'];
 
   const child = spawn(command, args, {
     cwd: PROJECT_ROOT,
@@ -194,14 +194,14 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+    app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`PROJECT_ROOT: ${PROJECT_ROOT}`);
     
     // Initial audit to generate telemetry on startup
     const useSudo = fs.existsSync('/usr/bin/sudo') || fs.existsSync('/bin/sudo');
-    const command = useSudo ? 'sudo' : './fix-wifi.sh';
-    const args = useSudo ? [`PROJECT_ROOT=${PROJECT_ROOT}`, './fix-wifi.sh', PROJECT_ROOT, '--audit'] : [PROJECT_ROOT, '--audit'];
+    const command = useSudo ? 'sudo' : 'bash';
+    const args = useSudo ? ['env', `PROJECT_ROOT=${PROJECT_ROOT}`, 'bash', './fix-wifi.sh', PROJECT_ROOT, '--audit'] : ['./fix-wifi.sh', PROJECT_ROOT, '--audit'];
     
     console.log(`[server] Starting initial audit...`);
     spawn(command, args, {

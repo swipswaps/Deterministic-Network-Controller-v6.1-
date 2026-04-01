@@ -101,14 +101,18 @@ export default function App() {
     eventSource.onopen = () => setConnectionStatus('connected');
     eventSource.onerror = () => setConnectionStatus('disconnected');
     eventSource.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'log') {
-        setLogs(prev => {
-          const newLogs = [...prev, ...data.lines];
-          // Filter duplicates and keep last 200
-          const uniqueLogs = Array.from(new Set(newLogs));
-          return uniqueLogs.slice(-200);
-        });
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'log') {
+          setLogs(prev => {
+            const newLogs = [...prev, ...data.lines];
+            // Filter duplicates and keep last 200
+            const uniqueLogs = Array.from(new Set(newLogs));
+            return uniqueLogs.slice(-200);
+          });
+        }
+      } catch (e) {
+        console.error('SSE Message Error:', e);
       }
     };
 
