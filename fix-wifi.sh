@@ -100,7 +100,16 @@ _STARTUP_RECOVERY_DONE=0
 # ── SUDO HELPER ──────────────────────────────────────────────────────────────
 SUDO=""
 if command -v sudo >/dev/null 2>&1; then
-    SUDO="sudo"
+    # Use -n (non-interactive) to prevent stalling if a password is required.
+    # This ensures verbatim telemetry doesn't hang.
+    if sudo -n true 2>/dev/null; then
+        SUDO="sudo -n"
+    else
+        # If we can't use sudo without a password, we'll try to use it anyway
+        # but warn that it might hang. In a server environment, it's better to fail.
+        # However, for this specific request, we'll use -n to fail fast.
+        SUDO="sudo -n"
+    fi
 fi
 
 log_stream() {
@@ -187,17 +196,17 @@ collect_forensics() {
     local out
 
     # 1. dmesg: Kernel/driver events
-    out=$(dmesg --time-format iso 2>/dev/null | grep -iE "brcm|b43|wlan|wifi|wlp|firmware|net|error|warn|disassoc|deauth|auth" | tail -80 || echo "(unavailable)")
+    out=$($SUDO dmesg --time-format iso 2>/dev/null | grep -iE "brcm|b43|wlan|wifi|wlp|firmware|net|error|warn|disassoc|deauth|auth" | tail -80 || echo "(unavailable)")
     tee_block "DMESG: kernel/driver events (last 80)" "$out"
     record_forensic "$trigger" "dmesg" "$out"
 
     # 2. journalctl: NetworkManager + wpa_supplicant
-    out=$(journalctl -u NetworkManager -u wpa_supplicant --since "5 minutes ago" --no-pager -o short-precise 2>/dev/null | tail -100 || echo "(unavailable)")
+    out=$($SUDO journalctl -u NetworkManager -u wpa_supplicant --since "5 minutes ago" --no-pager -o short-precise 2>/dev/null | tail -100 || echo "(unavailable)")
     tee_block "JOURNALCTL: NetworkManager + wpa_supplicant (last 5 min)" "$out"
     record_forensic "$trigger" "journalctl_nm_wpa" "$out"
 
     # 3. journalctl: kernel network events
-    out=$(journalctl -k --since "5 minutes ago" --no-pager -o short-precise 2>/dev/null | grep -iE "brcm|b43|wlan|wlp|wifi|disassoc|deauth|firmware" | tail -60 || echo "(unavailable)")
+    out=$($SUDO journalctl -k --since "5 minutes ago" --no-pager -o short-precise 2>/dev/null | grep -iE "brcm|b43|wlan|wlp|wifi|disassoc|deauth|firmware" | tail -60 || echo "(unavailable)")
     tee_block "JOURNALCTL: kernel network events (last 5 min)" "$out"
     record_forensic "$trigger" "journalctl_kernel" "$out"
 

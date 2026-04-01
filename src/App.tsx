@@ -106,9 +106,7 @@ export default function App() {
         if (data.type === 'log') {
           setLogs(prev => {
             const newLogs = [...prev, ...data.lines];
-            // Filter duplicates and keep last 200
-            const uniqueLogs = Array.from(new Set(newLogs));
-            return uniqueLogs.slice(-200);
+            return newLogs.slice(-500); // Increased buffer to 500
           });
         }
       } catch (e) {
