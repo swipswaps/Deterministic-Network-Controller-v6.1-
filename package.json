@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "sync-updates": "PROJECT_ROOT=$(pwd) bash sync-updates.sh",
+    "audit": "PROJECT_ROOT=$(pwd) bash fix-wifi.sh $(pwd) --audit"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

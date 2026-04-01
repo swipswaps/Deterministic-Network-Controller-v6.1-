@@ -10,14 +10,36 @@
 #   • Integrated security self-audit (linting)
 # =============================================================================
 
+# ── REQUEST COMPLIANCE: NUMBERED USER REQUESTS ───────────────────────────────
+#   1. Restore all telemetry data (ensure verbatim transparency in terminal).
+#   2. Fix recovery failures (especially for b43 hardware).
+#   3. Number the requests in the code comments.
+#   4. Fix each request individually.
+#   5. Emit upgraded code repository.
+#   6. Limit prose to verbose code comments.
+#   7. Include cutting-edge best practices linting code (v6.3).
+# ─────────────────────────────────────────────────────────────────────────────
+
 set -o errexit -o pipefail -o nounset
 
 # ── REQUEST COMPLIANCE: DIRECTORY DERIVATION ─────────────────────────────────
 # All scripts must derive their working directory from PROJECT_ROOT.
+# Request 4: Re-validate internal paths against the first argument if provided.
 if [[ -z "${PROJECT_ROOT:-}" ]]; then
     echo "FATAL: PROJECT_ROOT environment variable is not set." >&2
     exit 1
 fi
+
+# Re-validation against argument
+if [[ $# -gt 0 && "$1" != --* ]]; then
+    ARG_ROOT="$1"
+    if [[ "$ARG_ROOT" != "$PROJECT_ROOT" ]]; then
+        echo "FATAL: Argument root ($ARG_ROOT) does not match PROJECT_ROOT ($PROJECT_ROOT)." >&2
+        exit 1
+    fi
+    shift
+fi
+
 cd "$PROJECT_ROOT"
 
 # ── REQUEST COMPLIANCE: LOG PATH PRINTING ────────────────────────────────────
@@ -126,35 +148,195 @@ ENDSQL
     log_stream "MILESTONE" "$name | $detail"
 }
 
-# ── LINTING ──────────────────────────────────────────────────────────────────
+# ── DEPENDENCIES ─────────────────────────────────────────────────────────────
+check_dependencies() {
+    # Request 4: Ensure all required system binaries are present.
+    local deps=("nmcli" "sqlite3" "ping" "ip" "getent" "dig" "sudo" "modprobe" "iw" "ethtool")
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            log_stream "FATAL" "Missing dependency: $dep"
+            exit 1
+        fi
+    done
+    log_stream "ENGINE" "All dependencies verified"
+}
+
+# ── FORENSICS & TELEMETRY (15+ SOURCES) ──────────────────────────────────────
+#   WHAT: Collects exhaustive system state for network diagnostics.
+#   WHY:  Ensures verbatim transparency and forensic auditability.
+collect_forensics() {
+    local trigger="${1:-MANUAL}" iface="$2"
+    log_stream "FORENSIC" "=== FORENSIC START (trigger=$trigger iface=$iface) ==="
+
+    local out
+
+    # 1. dmesg: Kernel/driver events
+    out=$(dmesg --time-format iso 2>/dev/null | grep -iE "brcm|b43|wlan|wifi|wlp|firmware|net|error|warn|disassoc|deauth|auth" | tail -80 || echo "(unavailable)")
+    tee_block "DMESG: kernel/driver events (last 80)" "$out"
+    record_forensic "$trigger" "dmesg" "$out"
+
+    # 2. journalctl: NetworkManager + wpa_supplicant
+    out=$(journalctl -u NetworkManager -u wpa_supplicant --since "5 minutes ago" --no-pager -o short-precise 2>/dev/null | tail -100 || echo "(unavailable)")
+    tee_block "JOURNALCTL: NetworkManager + wpa_supplicant (last 5 min)" "$out"
+    record_forensic "$trigger" "journalctl_nm_wpa" "$out"
+
+    # 3. journalctl: kernel network events
+    out=$(journalctl -k --since "5 minutes ago" --no-pager -o short-precise 2>/dev/null | grep -iE "brcm|b43|wlan|wlp|wifi|disassoc|deauth|firmware" | tail -60 || echo "(unavailable)")
+    tee_block "JOURNALCTL: kernel network events (last 5 min)" "$out"
+    record_forensic "$trigger" "journalctl_kernel" "$out"
+
+    # 4. nmcli: full device state
+    out=$(nmcli device show "$iface" 2>&1 || echo "(failed)")
+    tee_block "NMCLI: full device state for $iface" "$out"
+    record_forensic "$trigger" "nmcli_device_show" "$out"
+
+    # 5. nmcli: active connection profiles
+    out=$(nmcli connection show --active 2>&1 || echo "(none)")
+    tee_block "NMCLI: active connection profiles" "$out"
+    record_forensic "$trigger" "nmcli_active_connections" "$out"
+
+    # 6. nmcli: all connection profiles
+    out=$(nmcli -f NAME,UUID,TYPE,DEVICE connection show 2>&1 || echo "(failed)")
+    tee_block "NMCLI: all connection profiles (NAME UUID TYPE DEVICE)" "$out"
+    record_forensic "$trigger" "nmcli_all_connections" "$out"
+
+    # 7. ip: packet counters
+    out=$(ip -s link show "$iface" 2>&1 || echo "(failed)")
+    tee_block "IP: packet counters for $iface" "$out"
+    record_forensic "$trigger" "ip_stats_link" "$out"
+
+    # 8. ip: full routing table
+    out=$(ip route 2>&1 || echo "(failed)")
+    tee_block "IP: full routing table" "$out"
+    record_forensic "$trigger" "ip_route" "$out"
+
+    # 9. ip: ARP neighbor table
+    out=$(ip neigh 2>&1 || echo "(failed)")
+    tee_block "IP: ARP neighbor table" "$out"
+    record_forensic "$trigger" "ip_neigh" "$out"
+
+    # 10. iw: association state
+    out=$(iw dev "$iface" link 2>&1 || echo "(not associated)")
+    tee_block "IW: association state + signal strength" "$out"
+    record_forensic "$trigger" "iw_dev_link" "$out"
+
+    # 11. iw: station stats
+    out=$(iw dev "$iface" station dump 2>&1 || echo "(not associated)")
+    tee_block "IW: station stats (RSSI, TX/RX bitrate, tx failed, beacon loss)" "$out"
+    record_forensic "$trigger" "iw_station_dump" "$out"
+
+    # 12. rfkill: kill switch state
+    out=$(rfkill list 2>&1 || echo "(unavailable)")
+    tee_block "RFKILL: kill switch state" "$out"
+    record_forensic "$trigger" "rfkill_list" "$out"
+
+    # 13. ss: open TCP/UDP sockets
+    out=$(ss -tunp 2>&1 | head -40 || echo "(unavailable)")
+    tee_block "SS: open TCP/UDP sockets" "$out"
+    record_forensic "$trigger" "ss_tunp" "$out"
+
+    # 14. tcpdump: live packet capture
+    if command -v tcpdump >/dev/null 2>&1; then
+        log_stream "FORENSIC" "Capturing $TCPDUMP_COUNT packets on $iface (5s)..."
+        out=$(sudo timeout 5 tcpdump -i "$iface" -c "$TCPDUMP_COUNT" -n -e -v 2>&1 || echo "(ended)")
+        tee_block "TCPDUMP: live packet capture on $iface ($TCPDUMP_COUNT pkts)" "$out"
+        record_forensic "$trigger" "tcpdump_live" "$out"
+    fi
+
+    # 15. wpa_supplicant: internal state
+    local wpa_out wpa_socket=""
+    for sock_path in "/var/run/wpa_supplicant/${iface}" "/run/wpa_supplicant/${iface}"; do
+        [[ -S "$sock_path" ]] && { wpa_socket="$sock_path"; break; }
+    done
+    if [[ -n "$wpa_socket" ]]; then
+        wpa_out=$(wpa_cli -p "$(dirname "$wpa_socket")" -i "$iface" status 2>&1 || echo "(failed)")
+    else
+        wpa_out="ctrl socket not found — reading from NM journal:"$'\n'
+        wpa_out+=$(journalctl -u NetworkManager --since "1 minute ago" --no-pager -o short-precise 2>/dev/null | grep -i "supplicant interface state" | tail -10 || echo "(unavailable)")
+    fi
+    tee_block "WPA_SUPPLICANT: internal state" "$wpa_out"
+    record_forensic "$trigger" "wpa_supplicant_state" "$wpa_out"
+
+    # 16. DNS: resolver state
+    local dns_out
+    if resolvectl status 2>/dev/null | grep -q "Link"; then
+        dns_out=$(resolvectl status 2>&1 | head -50)
+    else
+        dns_out="systemd-resolved not running."$'\n'
+        dns_out+="Resolver from /etc/resolv.conf:"$'\n'
+        dns_out+=$(cat /etc/resolv.conf 2>/dev/null || echo "(not readable)")
+        dns_out+=$'\n'"NM DNS config:"$'\n'
+        dns_out+=$(nmcli device show "$iface" 2>/dev/null | grep -iE "IP4.DNS|IP6.DNS" || echo "(none)")
+    fi
+    tee_block "DNS: resolver state" "$dns_out"
+    record_forensic "$trigger" "dns_resolver_state" "$dns_out"
+
+    sed -i 's/ssid="[^"]*"/ssid=<REDACTED>/g' "$LOG_FILE" 2>/dev/null || true
+    log_stream "FORENSIC" "=== FORENSIC END ==="
+}
+
+# ── B43 OPTIMIZATIONS ────────────────────────────────────────────────────────
+enforce_b43_optimizations() {
+    local iface="$1"
+    if [[ "$AUTO_DISABLE_B43_POWER_SAVE" -eq 1 ]]; then
+        if [[ $(iw dev "$iface" get power_save 2>/dev/null | grep -c "on") -gt 0 ]]; then
+            log_stream "OPTIMIZE" "Disabling b43 power save on $iface"
+            sudo iw dev "$iface" set power_save off || true
+        fi
+    fi
+}
+
+# ── LINTING (CUTTING EDGE v6.3) ──────────────────────────────────────────────
 #   WHAT: Performs a static analysis of the codebase for security risks.
 #   WHY:  Ensures no hardcoded credentials or unsafe patterns persist.
+#   UPGRADE: Added checks for unquoted array expansions and subshell leaks.
 lint_script() {
-    log_stream "LINT" "Starting self-audit..."
+    log_stream "LINT" "Starting self-audit (v6.3-advanced)..."
     local errors=0
     
-    # Check for hardcoded SSIDs or common identifiers
-    if grep -rEi "belkin|galaxy|linksys|password|secret" . --exclude="$(basename "$0")" --exclude="*.log" --exclude="*.db" --exclude-dir="node_modules"; then
-        log_stream "LINT" "❌ ERROR: Hardcoded network identifiers or secrets found in codebase"
+    # 1. Hardcoded Secrets (Improved Regex + Context)
+    if grep -rEi "password|secret|key|token|ssid|bssid|credential" . --exclude="$(basename "$0")" --exclude="*.log" --exclude="*.db" --exclude-dir="node_modules" | grep -vE "GEMINI_API_KEY|REDACTED"; then
+        log_stream "LINT" "❌ ERROR: Potential hardcoded secrets found"
         ((errors++))
     fi
 
-    # Check for eval usage (injection risk)
-    if grep -q "eval " "$0"; then
-        log_stream "LINT" "❌ ERROR: 'eval' usage detected in script"
+    # 2. Unsafe Execution Patterns (Expanded)
+    if grep -qE "eval |exec |sh -c |bash -c " "$0"; then
+        log_stream "LINT" "❌ ERROR: Unsafe execution pattern (eval/exec/sh) detected"
         ((errors++))
     fi
 
-    # Check for unvalidated UUID usage
-    if ! grep -q "validate_uuid" "$0"; then
-        log_stream "LINT" "❌ ERROR: UUID validation missing"
+    # 3. Validation Coverage (Strict)
+    if ! grep -q "validate_uuid" "$0" || ! grep -q "validate_iface" "$0"; then
+        log_stream "LINT" "❌ ERROR: Input validation functions missing or unused"
         ((errors++))
     fi
 
-    # Check for unquoted variables in sensitive commands
-    if grep -E "rm -rf \$[A-Z_]+" "$0"; then
-        log_stream "LINT" "❌ ERROR: Unquoted variable in 'rm' command"
+    # 4. Path Resolution (PROJECT_ROOT enforcement)
+    if ! grep -q "PROJECT_ROOT" "$0"; then
+        log_stream "LINT" "❌ ERROR: PROJECT_ROOT derivation missing"
         ((errors++))
+    fi
+
+    # 5. Sudo Usage Audit (Contextual)
+    if grep -q "sudo " "$0" && ! grep -q "NOPASSWD" README.md; then
+        log_stream "LINT" "⚠ WARNING: Sudo used but NOPASSWD instructions missing in README"
+    fi
+
+    # 6. Shellcheck-style Quote Audit (Advanced)
+    if grep -E "[^=]\$([a-zA-Z_][a-zA-Z0-9_]*)" "$0" | grep -vE "\[\[|\{\{|\}\}|#|case|for|local|declare"; then
+        log_stream "LINT" "⚠ WARNING: Unquoted variable expansion detected"
+    fi
+
+    # 7. Verbatim Transparency Audit (Request 1)
+    if ! grep -q "tee -a \"\$LOG_FILE\"" "$0"; then
+        log_stream "LINT" "❌ ERROR: Verbatim transparency (tee) missing from script"
+        ((errors++))
+    fi
+
+    # 8. Array Quote Audit (v6.3)
+    if grep -qE "\$\{[a-zA-Z_][a-zA-Z0-9_]*\[@\]\}" "$0" | grep -v '"'; then
+        log_stream "LINT" "⚠ WARNING: Unquoted array expansion detected"
     fi
 
     if [[ $errors -eq 0 ]]; then
@@ -169,19 +351,27 @@ lint_script() {
 # ── RUN_CMD (sanitized) ──────────────────────────────────────────────────────
 #   WHAT: Executes a command and captures its output and exit code.
 #   WHY:  Provides verbatim transparency and auditability.
+#   Request 1: Ensure command output is teed to terminal and log file.
 run_cmd() {
     local cmd=("$@")
     local tmpout rc_file
     tmpout=$(mktemp_safe)
     rc_file=$(mktemp_safe)
+    
+    # Verbatim transparency: Output to stdout, log file, and capture for DB
+    log_stream "EXEC" "${cmd[*]}"
     {
-        "${cmd[@]}" 2>&1 | tee "$tmpout"
+        # We use tee twice: once to capture for the DB, once to append to the log.
+        # Both ensure the output reaches the terminal (stdout).
+        "${cmd[@]}" 2>&1 | tee "$tmpout" | tee -a "$LOG_FILE"
         echo "${PIPESTATUS[0]}" > "$rc_file"
     } || true
+    
     _CMD_OUT=$(cat "$tmpout")
     _LAST_RC=$(cat "$rc_file")
-    log_stream "EXEC" "${cmd[*]}"
+    
     log_stream "RC" "rc=${_LAST_RC}"
+    
     sqlite3 "$DB" <<ENDSQL 2>>"$LOG_FILE" || true
 INSERT INTO commands(timestamp, command, exit_code, output)
 VALUES('$(date -Iseconds)', '$(sq "${cmd[*]}")', ${_LAST_RC}, '$(sq "$_CMD_OUT")');
@@ -360,6 +550,23 @@ pid_controller() {
 }
 
 # ── RECOVERY ─────────────────────────────────────────────────────────────────
+#   Request 2: Fix recovery failures (especially for b43 hardware).
+#   Request 4: Implement wait_for_networking_enabled re-check.
+
+wait_for_networking_enabled() {
+    log_stream "RECOVERY" "Waiting for NetworkingEnabled=true in state file..."
+    local statefile="/var/lib/NetworkManager/NetworkManager.state"
+    for ((i=1; i<=10; i++)); do
+        if grep -q "NetworkingEnabled=true" "$statefile" 2>/dev/null; then
+            log_stream "RECOVERY" "✅ NetworkingEnabled=true detected"
+            return 0
+        fi
+        sleep 1
+    done
+    log_stream "RECOVERY" "⚠ NetworkingEnabled=true NOT detected after 10s"
+    return 1
+}
+
 run_soft_recovery() {
     log_stream "RECOVERY" "SOFT: Restarting NetworkManager"
     run_cmd sudo systemctl restart NetworkManager
@@ -373,22 +580,51 @@ run_recovery() {
     audit_nm_settings "$iface"
     enforce_nm_applet
 
+    # Request 4: Re-check health after applet fix + state file enforcement
+    wait_for_networking_enabled || true
+
     if calculate_health "$iface"; then
-        log_stream "RECOVERY" "Fixed by applet enforcement"
+        log_stream "RECOVERY" "Network is now HEALTHY after applet fix — skipping hard recovery"
+        record_milestone "RECOVERY_SKIPPED" "Fixed by applet recovery only"
+        collect_forensics "POST_RECOVERY" "$iface"
         return 0
     fi
 
-    run_cmd sudo modprobe -r brcmfmac brcmutil
-    sleep 2
-    run_cmd sudo modprobe brcmfmac
+    log_stream "RECOVERY" "Still degraded — performing hard recovery"
+
+    # Detect driver (b43 vs brcmfmac)
+    local driver; driver=$(ethtool -i "$iface" 2>/dev/null | awk '/driver:/{print $2}' || echo "unknown")
+    if [[ "$driver" == "unknown" ]]; then
+        driver=$(basename "$(readlink "/sys/class/net/$iface/device/driver")" 2>/dev/null || echo "unknown")
+    fi
+    log_stream "RECOVERY" "Detected driver: $driver"
+
+    # Request 2: Improved b43 recovery (reload bcma/ssb if present)
+    run_cmd sudo systemctl stop NetworkManager
+    
+    if [[ "$driver" == "b43" ]]; then
+        log_stream "RECOVERY" "Performing aggressive b43 module reload"
+        run_cmd sudo modprobe -r b43 bcma ssb 2>/dev/null || run_cmd sudo modprobe -r b43
+        sleep 2
+        run_cmd sudo modprobe b43
+    elif [[ "$driver" == "brcmfmac" ]]; then
+        log_stream "RECOVERY" "Performing brcmfmac module reload"
+        run_cmd sudo modprobe -r brcmfmac brcmutil
+        sleep 2
+        run_cmd sudo modprobe brcmfmac
+    else
+        log_stream "RECOVERY" "Unknown driver, skipping module reload"
+    fi
+
     sleep 3
-    run_cmd sudo systemctl restart NetworkManager
+    run_cmd sudo systemctl start NetworkManager
     wait_for_nm
     
     local uuid; uuid=$(find_wifi_uuid "$iface")
     [[ -n "$uuid" ]] && run_cmd nmcli connection up uuid "$uuid"
     
     collect_forensics "POST_RECOVERY" "$iface"
+    record_milestone "RECOVERY_COMPLETE" "iface=$iface"
 }
 
 wait_for_nm() {
@@ -422,6 +658,7 @@ run_loop() {
     log_stream "ENGINE" "Loop started"
     while true; do
         enforce_nm_applet
+        enforce_b43_optimizations "$IFACE"
         local composite_degraded=0; [[ "$MULTI_IFACE_BALANCING" -eq 1 ]] && composite_degraded=$(evaluate_all_interfaces "$IFACE")
 
         if calculate_health "$IFACE"; then

@@ -49,7 +49,7 @@ app.get('/api/status', (req, res) => {
 });
 
 app.get('/api/lint', (req, res) => {
-  const child = spawn('sudo', ['./fix-wifi.sh', '--lint'], {
+  const child = spawn('sudo', ['./fix-wifi.sh', PROJECT_ROOT, '--lint'], {
     cwd: PROJECT_ROOT,
     env: { ...process.env, PROJECT_ROOT }
   });
@@ -75,8 +75,8 @@ app.get('/api/forensics', (req, res) => {
 });
 
 app.post('/api/recover', (req, res) => {
-  // ── REQUEST COMPLIANCE: SYSTEM BINARY CALL WITH CWD ───────────────────────
-  const child = spawn('sudo', ['./fix-wifi.sh', '--force'], {
+  // ── REQUEST COMPLIANCE: SYSTEM BINARY CALL WITH CWD AS ARGUMENT ───────────
+  const child = spawn('sudo', ['./fix-wifi.sh', PROJECT_ROOT, '--force'], {
     cwd: PROJECT_ROOT,
     env: { ...process.env, PROJECT_ROOT }
   });
